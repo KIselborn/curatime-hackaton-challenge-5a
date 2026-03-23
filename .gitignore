@@ -1,0 +1,10 @@
+.idea
+.venv
+data
+.claude
+*.tsv
+*.pkl
+*.log
+mise.toml
+catboost_info
+__pycache__
