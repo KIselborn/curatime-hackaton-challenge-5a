@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from pathlib import Path
 
 import joblib
@@ -10,9 +11,17 @@ from lightgbm import LGBMClassifier
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
+# Set random seeds for reproducibility BEFORE any other imports
+os.environ['PYTHONHASHSEED'] = '42'
+np.random.seed(42)
+import random
+random.seed(42)
+
 from src.data_loader import load_agp_cvd_dataset
 from src.feature_engineering import MicrobiomeFeatureEngineer
 from src.gai import GutAgingIndex
+from src.shap_analysis import run_gai_shap_analysis, run_shap_analysis
+from src.taxonomy_mapper import annotate_gai_shap_report
 
 
 def build_features_with_gai(train_otu, train_meta, target_otu, target_meta):
@@ -242,7 +251,7 @@ def main():
     print("Class distribution:")
     print(y.value_counts())
 
-    meta, otu,_,_  = build_features_with_gai(
+    meta, otu, fe, gai_model  = build_features_with_gai(
         train_otu=otu,
         train_meta=meta,
         target_otu=otu,
@@ -323,13 +332,23 @@ def main():
     #joblib.dump(fe, output_dir / "feature_engineer.joblib")
     #joblib.dump(gai_model, output_dir / "gai_model.joblib")
 
+    print("\n=== Holdout Evaluation ===")
+    print(f"Balanced Accuracy: {test_bal_acc:.4f}")
+    print(f"AUC-ROC:           {test_auc:.4f}")
+    print(f"Threshold:         {threshold:.3f}")
+    if "nested_cv" in metrics:
+        nested = metrics["nested_cv"]
+        print("\n=== Nested CV Summary ===")
+        print(f"Balanced Accuracy: {nested['nested_cv_balanced_accuracy_mean']:.4f} ± {nested['nested_cv_balanced_accuracy_std']:.4f}")
+        print(f"AUC-ROC:           {nested['nested_cv_auc_mean']:.4f} ± {nested['nested_cv_auc_std']:.4f}")
+
     # ─── SHAP Analysis for Model Interpretability ───────────────────────────────
     print("\n=== SHAP-Based Interpretability Analysis ===")
     taxonomy_file = Path(__file__).parent / "97_otu_taxonomy.txt"
     
     shap_results = run_shap_analysis(
         model=model,
-        X_test=X_test,
+        X_test=X_test_otu,
         output_dir=output_dir / "shap_analysis",
         check_additivity=False,
         taxonomy_file=taxonomy_file if taxonomy_file.exists() else None
@@ -421,16 +440,6 @@ def main():
     print(f"\nInterpretability Report: {output_dir}/shap_analysis/shap_analysis_report.json")
     print(f"Summary Plot: {output_dir}/shap_analysis/shap_summary.png")
     
-    print("\n=== Holdout Evaluation ===")
-    print(f"Balanced Accuracy: {test_bal_acc:.4f}")
-    print(f"AUC-ROC:           {test_auc:.4f}")
-    print(f"Threshold:         {threshold:.3f}")
-    if "nested_cv" in metrics:
-        nested = metrics["nested_cv"]
-        print("\n=== Nested CV Summary ===")
-        print(f"Balanced Accuracy: {nested['nested_cv_balanced_accuracy_mean']:.4f} ± {nested['nested_cv_balanced_accuracy_std']:.4f}")
-        print(f"AUC-ROC:           {nested['nested_cv_auc_mean']:.4f} ± {nested['nested_cv_auc_std']:.4f}")
-
 
 if __name__ == "__main__":
     main()
