@@ -8,3 +8,7 @@ data
 mise.toml
 catboost_info
 __pycache__
+venv3.11/
+.venv/
+__pycache__/
+*.pyc
