@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 from pathlib import Path
 
 import joblib
@@ -10,9 +11,17 @@ from lightgbm import LGBMClassifier
 from sklearn.metrics import balanced_accuracy_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, train_test_split
 
+# Set random seeds for reproducibility BEFORE any other imports
+os.environ['PYTHONHASHSEED'] = '42'
+np.random.seed(42)
+import random
+random.seed(42)
+
 from src.data_loader import load_agp_cvd_dataset
 from src.feature_engineering import MicrobiomeFeatureEngineer
 from src.gai import GutAgingIndex
+from src.shap_analysis import run_gai_shap_analysis, run_shap_analysis
+from src.taxonomy_mapper import annotate_gai_shap_report
 
 
 def build_features_with_gai(train_otu, train_meta, target_otu, target_meta):
@@ -242,7 +251,7 @@ def main():
     print("Class distribution:")
     print(y.value_counts())
 
-    meta, otu,_,_  = build_features_with_gai(
+    meta, otu, fe, gai_model  = build_features_with_gai(
         train_otu=otu,
         train_meta=meta,
         target_otu=otu,
@@ -333,6 +342,104 @@ def main():
         print(f"Balanced Accuracy: {nested['nested_cv_balanced_accuracy_mean']:.4f} ± {nested['nested_cv_balanced_accuracy_std']:.4f}")
         print(f"AUC-ROC:           {nested['nested_cv_auc_mean']:.4f} ± {nested['nested_cv_auc_std']:.4f}")
 
+    # ─── SHAP Analysis for Model Interpretability ───────────────────────────────
+    print("\n=== SHAP-Based Interpretability Analysis ===")
+    taxonomy_file = Path(__file__).parent / "97_otu_taxonomy.txt"
+    
+    shap_results = run_shap_analysis(
+        model=model,
+        X_test=X_test_otu,
+        output_dir=output_dir / "shap_analysis",
+        check_additivity=False,
+        taxonomy_file=taxonomy_file if taxonomy_file.exists() else None
+    )
+    
+    # Run GAI-level SHAP analysis (interpreting drivers of gai_corrected)
+    gai_shap_results = run_gai_shap_analysis(
+        gai_model=gai_model,
+        otu_df=X_test_otu,  # Use test OTU data for SHAP explanations
+        output_dir=output_dir / "gai_shap_analysis",
+        check_additivity=False,
+        n_top=30,
+        taxonomy_file=taxonomy_file if taxonomy_file.exists() else None
+    )
+
+    # Annotate GAI SHAP report with taxonomy and CVD mechanisms
+    print("\n=== Annotating SHAP Features with Taxonomy ===")
+    taxonomy_file = Path(__file__).parent / "97_otu_taxonomy.txt"
+    if taxonomy_file.exists():
+        try:
+            gai_report_path = output_dir / "gai_shap_analysis" / "gai_shap_analysis_report.json"
+            gai_annotated_path = output_dir / "gai_shap_analysis" / "gai_shap_analysis_annotated.json"
+            annotate_gai_shap_report(
+                gai_shap_report_path=gai_report_path,
+                taxonomy_file=taxonomy_file,
+                output_path=gai_annotated_path
+            )
+            print(f"✓ Annotated GAI SHAP report saved to: {gai_annotated_path}")
+            
+            # Generate biological summary
+            print("\n=== Generating Biological Summary ===")
+            from create_biological_summary import create_biological_summary
+            summary_result = create_biological_summary(
+                shap_report_path=gai_annotated_path,
+                output_path=output_dir / "gai_shap_analysis" / "biological_summary.html"
+            )
+            print(f"✓ Biological summary HTML: {summary_result['html_report']}")
+            
+        except Exception as e:
+            print(f"⚠ Taxonomy annotation or summary generation failed: {str(e)}")
+    else:
+        print(f"⚠ Taxonomy file not found at {taxonomy_file}. Skipping annotation and summary.")
+
+    # Save SHAP analysis summary to metrics
+    metrics["shap_analysis"] = {
+        "status": "completed",
+        "top_5_features": shap_results["importance_df"].head(5)["feature"].tolist(),
+        "biomarkers_detected": list(shap_results["biomarker_map"].keys()),
+        "report_path": "shap_analysis/shap_analysis_report.json",
+        "plots": {
+            "summary": "shap_analysis/shap_summary.png",
+            "dependence": "shap_analysis/shap_dependence/"
+        }
+    }
+    metrics["gai_shap_analysis"] = {
+        "status": "completed",
+        "top_5_features": gai_shap_results["importance_df"].head(5)["feature"].tolist(),
+        "biomarkers_detected": list(gai_shap_results["biomarker_map"].keys()),
+        "report_path": "gai_shap_analysis/gai_shap_analysis_report.json",
+        "plots": {
+            "summary": "gai_shap_analysis/gai_shap_summary.png",
+            "dependence": "gai_shap_analysis/gai_shap_dependence/"
+        }
+    }
+
+    joblib.dump(model, output_dir / "lgbm_cvd_model.joblib")
+    joblib.dump(fe, output_dir / "feature_engineer.joblib")
+    joblib.dump(gai_model, output_dir / "gai_model.joblib")
+    
+    # Save updated metrics with SHAP results
+    with open(output_dir / "metrics.json", "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=2)
+
+    
+    print("\n=== SHAP Analysis Summary ===")
+    print("Top 5 Predictive Features:")
+    for idx, (_, row) in enumerate(shap_results["importance_df"].head(5).iterrows(), 1):
+        print(f"  {idx}. {row['feature']:<40} (|SHAP|: {row['mean_|shap|']:.4f})")
+    
+    print("\nBiomarker Mechanisms Identified:")
+    for mechanism, features in shap_results["biomarker_map"].items():
+        if mechanism != "unclassified" and features:
+            print(f"  • {mechanism}: {len(features)} feature(s) detected")
+    
+    print("\nBiological Insights:")
+    for insight in shap_results["insights"].get("publication_value", [])[:3]:
+        print(f"  • {insight}")
+    
+    print(f"\nInterpretability Report: {output_dir}/shap_analysis/shap_analysis_report.json")
+    print(f"Summary Plot: {output_dir}/shap_analysis/shap_summary.png")
+    
 
 if __name__ == "__main__":
     main()

@@ -87,3 +87,6 @@ python gai_cal.py [PATH_TO_META_FILE] [PATH_TO_OTU_FILE] [OUTPUT_DIR]
 ## Contact
 
 [firstname].[lastname]@dfki.de
+
+LINK FOR PRESENTATION : https://1drv.ms/p/c/9a70ad4093d3b17b/IQDHjtupmuYgRqs20rmpb432AZLDsanL9jOTWvKeHrEwbFc?e=gKy6Uc
+
