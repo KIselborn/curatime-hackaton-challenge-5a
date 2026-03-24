@@ -93,20 +93,15 @@ def cv_score_with_optuna_params(X_otu, meta, y, params, n_splits=3, random_state
         y_train = y.iloc[train_idx]
         y_val = y.iloc[val_idx]
 
-        X_train, X_val, _, _ = build_features_with_gai(
-            train_otu=X_train_otu,
-            train_meta=meta_train,
-            target_otu=X_val_otu,
-            target_meta=meta_val,
-        )
+    
 
         smote = SMOTE(random_state=random_state)
-        X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
+        X_train_res, y_train_res = smote.fit_resample(X_train_otu, y_train)
 
         model = LGBMClassifier(**params)
         model.fit(X_train_res, y_train_res)
 
-        y_prob = model.predict_proba(X_val)[:, 1]
+        y_prob = model.predict_proba(X_val_otu)[:, 1]
         auc = roc_auc_score(y_val, y_prob)
         threshold, bal_acc = find_best_threshold(y_val.values, y_prob)
 
@@ -202,20 +197,15 @@ def run_nested_cv_report(X_otu, meta, y, outer_splits=3, inner_trials=8, inner_s
             random_state=random_state + fold_idx,
         )
 
-        X_train_fe, X_test_fe, _, _ = build_features_with_gai(
-            train_otu=X_outer_train,
-            train_meta=meta_outer_train,
-            target_otu=X_outer_test,
-            target_meta=meta_outer_test,
-        )
+        
 
         smote = SMOTE(random_state=random_state + fold_idx)
-        X_train_res, y_train_res = smote.fit_resample(X_train_fe, y_outer_train)
+        X_train_res, y_train_res = smote.fit_resample(X_outer_train, y_outer_train)
 
         model = LGBMClassifier(**params)
         model.fit(X_train_res, y_train_res)
 
-        y_prob = model.predict_proba(X_test_fe)[:, 1]
+        y_prob = model.predict_proba(X_outer_test)[:, 1]
         y_pred = (y_prob >= threshold).astype(int)
 
         outer_auc.append(float(roc_auc_score(y_outer_test, y_prob)))
@@ -252,6 +242,13 @@ def main():
     print("Class distribution:")
     print(y.value_counts())
 
+    meta, otu,_,_  = build_features_with_gai(
+        train_otu=otu,
+        train_meta=meta,
+        target_otu=otu,
+        target_meta=meta,
+        )
+
     X_train_otu, X_test_otu, meta_train, meta_test, y_train, y_test = train_test_split(
         otu,
         meta,
@@ -283,20 +280,15 @@ def main():
     )
 
     print("Training final model on holdout split...")
-    X_train, X_test, fe, gai_model = build_features_with_gai(
-        train_otu=X_train_otu,
-        train_meta=meta_train,
-        target_otu=X_test_otu,
-        target_meta=meta_test,
-    )
+    
 
     smote = SMOTE(random_state=42)
-    X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
+    X_train_res, y_train_res = smote.fit_resample(X_train_otu, y_train)
 
     model = LGBMClassifier(**best_params)
     model.fit(X_train_res, y_train_res)
 
-    y_prob = model.predict_proba(X_test)[:, 1]
+    y_prob = model.predict_proba(X_test_otu)[:, 1]
     y_pred = (y_prob >= threshold).astype(int)
 
     test_auc = float(roc_auc_score(y_test, y_prob))
@@ -307,7 +299,7 @@ def main():
         "holdout_auc": test_auc,
         "threshold": float(threshold),
         "n_samples": int(len(y)),
-        "n_engineered_features": int(X_train.shape[1]),
+        "n_engineered_features": int(X_train_otu.shape[1]),
         "optuna": tuning,
     }
 
@@ -328,8 +320,8 @@ def main():
         json.dump(metrics, f, indent=2)
 
     joblib.dump(model, output_dir / "lgbm_cvd_model.joblib")
-    joblib.dump(fe, output_dir / "feature_engineer.joblib")
-    joblib.dump(gai_model, output_dir / "gai_model.joblib")
+    #joblib.dump(fe, output_dir / "feature_engineer.joblib")
+    #joblib.dump(gai_model, output_dir / "gai_model.joblib")
 
     print("\n=== Holdout Evaluation ===")
     print(f"Balanced Accuracy: {test_bal_acc:.4f}")
