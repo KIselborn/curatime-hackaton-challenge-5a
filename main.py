@@ -13,6 +13,7 @@ from sklearn.model_selection import StratifiedKFold, train_test_split
 from src.data_loader import load_agp_cvd_dataset
 from src.feature_engineering import MicrobiomeFeatureEngineer
 from src.gai import GutAgingIndex
+from src.shap_analysis import run_shap_analysis
 
 
 def build_features_with_gai(train_otu, train_meta, target_otu, target_meta):
@@ -327,14 +328,57 @@ def main():
     with open(output_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
 
+    # ─── SHAP Analysis for Model Interpretability ───────────────────────────────
+    print("\n=== SHAP-Based Interpretability Analysis ===")
+    shap_results = run_shap_analysis(
+        model=model,
+        X_test=X_test,
+        output_dir=output_dir / "shap_analysis",
+        check_additivity=False
+    )
+    
+    # Save SHAP analysis summary to metrics
+    metrics["shap_analysis"] = {
+        "status": "completed",
+        "top_5_features": shap_results["importance_df"].head(5)["feature"].tolist(),
+        "biomarkers_detected": list(shap_results["biomarker_map"].keys()),
+        "report_path": "shap_analysis/shap_analysis_report.json",
+        "plots": {
+            "summary": "shap_analysis/shap_summary.png",
+            "dependence": "shap_analysis/shap_dependence/"
+        }
+    }
+
     joblib.dump(model, output_dir / "lgbm_cvd_model.joblib")
     joblib.dump(fe, output_dir / "feature_engineer.joblib")
     joblib.dump(gai_model, output_dir / "gai_model.joblib")
+    
+    # Save updated metrics with SHAP results
+    with open(output_dir / "metrics.json", "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=2)
 
     print("\n=== Holdout Evaluation ===")
     print(f"Balanced Accuracy: {test_bal_acc:.4f}")
     print(f"AUC-ROC:           {test_auc:.4f}")
     print(f"Threshold:         {threshold:.3f}")
+    
+    print("\n=== SHAP Analysis Summary ===")
+    print("Top 5 Predictive Features:")
+    for idx, (_, row) in enumerate(shap_results["importance_df"].head(5).iterrows(), 1):
+        print(f"  {idx}. {row['feature']:<40} (|SHAP|: {row['mean_|shap|']:.4f})")
+    
+    print("\nBiomarker Mechanisms Identified:")
+    for mechanism, features in shap_results["biomarker_map"].items():
+        if mechanism != "unclassified" and features:
+            print(f"  • {mechanism}: {len(features)} feature(s) detected")
+    
+    print("\nBiological Insights:")
+    for insight in shap_results["insights"].get("publication_value", [])[:3]:
+        print(f"  • {insight}")
+    
+    print(f"\nInterpretability Report: {output_dir}/shap_analysis/shap_analysis_report.json")
+    print(f"Summary Plot: {output_dir}/shap_analysis/shap_summary.png")
+    
     if "nested_cv" in metrics:
         nested = metrics["nested_cv"]
         print("\n=== Nested CV Summary ===")
