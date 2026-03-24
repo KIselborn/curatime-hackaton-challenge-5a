@@ -27,11 +27,10 @@ def extract_cvd_labels(meta: pd.DataFrame, cvd_column: str = "cardiovascular_dis
         raise ValueError("Missing required 'health' column in metadata.")
 
     is_cvd = meta[cvd_column] == DIAGNOSED_CVD_STRING
-    is_healthy = meta["health"] == "y"
-    keep_mask = is_cvd | is_healthy
-
-    meta_filtered = meta.loc[keep_mask].copy()
-    meta_filtered["cvd"] = is_cvd.loc[keep_mask].astype(int)
+    
+   
+    meta_filtered = meta.copy()
+    meta_filtered["cvd"] = is_cvd.fillna(False).astype(int)
     return meta_filtered
 
 
